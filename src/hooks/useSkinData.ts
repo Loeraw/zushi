@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from "react";
 import { getCached, getStale, setCache } from "../lib/cache";
-import type { Champion, Skin, Chroma, SkinGroup } from "../types";
+import type { Champion, Skin, Chroma, SkinForm, SkinGroup } from "../types";
 
 const SKIN_IDS_URL =
   "https://raw.githubusercontent.com/Alban1911/LeagueSkins/main/resources/en/skin_ids.json";
@@ -16,7 +16,68 @@ const CHROMAS_CACHE_KEY = "zushi:chromas";
 
 let skinIdsCache: Record<string, string> | null = null;
 let repoZipsCache: Map<string, string> | null = null;
+let repoFormIdsByParent = new Map<string, string[]>();
 let chromaInfoCache: Map<number, { colors: string[]; parentId: number }> | null = null;
+
+const FORM_LABELS: Record<string, string> = {
+  // Elementalist Lux.
+  "99991": "Air",
+  "99992": "Dark",
+  "99993": "Ice",
+  "99994": "Magma",
+  "99995": "Mystic",
+  "99996": "Nature",
+  "99997": "Storm",
+  "99998": "Water",
+  "99999": "Fire",
+  // Spirit Blossom Morgana.
+  "25999": "Form 1",
+  // Radiant Serpent Sett.
+  "875998": "Form 2",
+  "875999": "Form 3",
+  // K/DA ALL OUT Seraphine.
+  "147002": "Form 1",
+  "147003": "Form 2",
+  // DJ Sona.
+  "37998": "Form 1",
+  "37999": "Form 2",
+  // Arcane Fractured Jinx.
+  "222998": "Form 1",
+  "222999": "Form 2",
+  // Risen Legend Kai'Sa.
+  "145071": "Form 1",
+  "145999": "Form 2",
+  // Revenant Reign Viego: the base package is the default / first form.
+  "234994": "Form 2",
+  "234995": "Form 3",
+  "234996": "Form 4",
+  "234997": "Form 5",
+  "234998": "Form 6",
+  "234999": "Form 7",
+  // Sahn-Uzal Mordekaiser has two fixed evolved form packages.
+  "82998": "Form 1",
+  "82999": "Form 2",
+  // Gun Goddess Miss Fortune.
+  "21997": "Zero Hour",
+  "21998": "Royal Arms",
+  "21999": "Starswarm",
+  // Risen Legend Ahri.
+  "103086": "Immortalized Legend",
+  "103087": "Form 2",
+};
+
+function rebuildRepoFormIndex(files: Map<string, string>): void {
+  const next = new Map<string, string[]>();
+  for (const [id, path] of files) {
+    const match = path.match(/^skins\/\d+\/(\d+)\/(\d+)\/\2\.(?:fantome|zip)$/);
+    if (!match || match[2] !== id) continue;
+    const ids = next.get(match[1]) ?? [];
+    ids.push(id);
+    next.set(match[1], ids);
+  }
+  for (const ids of next.values()) ids.sort((a, b) => Number(a) - Number(b));
+  repoFormIdsByParent = next;
+}
 
 // Reverse indices over skinIdsCache so name-based lookups are O(1) instead of
 // scanning all ~9k entries on every call (My Skins does this per skin, per render).
@@ -75,6 +136,7 @@ export function ensureRepoZips(): Promise<Map<string, string>> {
   const cached = getCached<[string, string][]>(REPO_ZIPS_CACHE_KEY);
   if (cached) {
     repoZipsCache = new Map(cached);
+    rebuildRepoFormIndex(repoZipsCache);
     return Promise.resolve(repoZipsCache);
   }
 
@@ -101,6 +163,7 @@ export function ensureRepoZips(): Promise<Map<string, string>> {
         map.set(skinId, entry.path);
       }
       repoZipsCache = map;
+      rebuildRepoFormIndex(map);
       setCache(REPO_ZIPS_CACHE_KEY, [...map.entries()]);
       return map;
     })
@@ -184,7 +247,7 @@ export function getSkinsGroupedForChampion(
 ): SkinGroup[] {
   const flat = getSkinsForChampion(champion, skinIds);
   if (!chromaInfoCache || chromaInfoCache.size === 0) {
-    return flat.map((s) => ({ base: s, chromas: [] }));
+    return flat.map((s) => ({ base: s, chromas: [], forms: getFormsForSkin(s, skinIds) }));
   }
 
   const byId = new Map<number, Skin>();
@@ -198,7 +261,7 @@ export function getSkinsGroupedForChampion(
     const chromaInfo = chromaInfoCache.get(numericId);
 
     if (!chromaInfo) {
-      groups.set(numericId, { base: s, chromas: [] });
+      groups.set(numericId, { base: s, chromas: [], forms: getFormsForSkin(s, skinIds) });
       continue;
     }
 
@@ -220,7 +283,7 @@ export function getSkinsGroupedForChampion(
     if (g) {
       g.chromas.push(c);
     } else {
-      groups.set(parseInt(c.id, 10), { base: c, chromas: [] });
+      groups.set(parseInt(c.id, 10), { base: c, chromas: [], forms: getFormsForSkin(c, skinIds) });
     }
   }
 
@@ -228,6 +291,46 @@ export function getSkinsGroupedForChampion(
   result.sort((a, b) => a.base.num - b.base.num);
   for (const g of result) g.chromas.sort((a, b) => a.num - b.num);
   return result;
+}
+
+function getFormsForSkin(base: Skin, skinIds: Record<string, string>): SkinForm[] {
+  const formIds = repoFormIdsByParent.get(base.id) ?? [];
+  return formIds
+    .filter((id) => skinIds[id] === undefined)
+    .map((id, index) => {
+      const label = FORM_LABELS[id] ?? `Form ${index + 1}`;
+      const path = repoZipsCache?.get(id);
+      const previewUrl = path
+        ? `https://raw.githubusercontent.com/Alban1911/LeagueSkins/main/${path.replace(/\.(?:fantome|zip)$/, ".png")}`
+        : undefined;
+      return {
+        id,
+        num: base.num,
+        name: `${base.name} (${label})`,
+        championId: base.championId,
+        championName: base.championName,
+        parentName: base.name,
+        label,
+        previewUrl,
+      };
+    });
+}
+
+export function lookupFormInfo(skinName: string): { parentName: string; label: string } | null {
+  const match = skinName.match(/^(.+) \((Form \d+)\)$/);
+  if (match) return { parentName: match[1], label: match[2] };
+
+  if (!skinIdsCache) return null;
+  for (const [parentId, formIds] of repoFormIdsByParent) {
+    const parentName = skinIdsCache[parentId];
+    if (!parentName) continue;
+    for (const [index, formId] of formIds.entries()) {
+      if (skinIdsCache[formId] !== undefined) continue;
+      const label = FORM_LABELS[formId] ?? `Form ${index + 1}`;
+      if (skinName === `${parentName} (${label})`) return { parentName, label };
+    }
+  }
+  return null;
 }
 
 export function lookupChromaInfo(
@@ -271,6 +374,12 @@ export function getSplashNum(skin: Skin): number {
 export function lookupSplashNum(skinName: string): number | null {
   if (!skinIdsCache) return null;
   ensureSkinIndexes();
+
+  const form = lookupFormInfo(skinName);
+  if (form) {
+    const parentId = skinNameToId!.get(form.parentName);
+    return parentId === undefined ? null : parseInt(parentId, 10) % 1000;
+  }
 
   const foundId = skinNameToId!.get(skinName);
   if (foundId === undefined) return null;
@@ -317,17 +426,10 @@ export function useSkinData(champion: Champion | null) {
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    if (skinIdsCache && repoZipsCache) {
-      setSkinIds(skinIdsCache);
-      setLoading(false);
-      void ensureChromaInfo();
-      return;
-    }
-
-    void ensureChromaInfo();
-    Promise.all([ensureSkinIds(), ensureRepoZips()])
+    Promise.all([ensureSkinIds(), ensureRepoZips(), ensureChromaInfo()])
       .then(([ids]) => {
-        setSkinIds(ids);
+        // A fresh object also refreshes grouping after the chroma/form indexes load.
+        setSkinIds({ ...ids });
       })
       .catch((err) => setError(String(err)))
       .finally(() => setLoading(false));

@@ -1,7 +1,12 @@
 import { useState, useEffect, useMemo } from "react";
 import { Layers, Check, Info, X, Search } from "lucide-react";
 import { splashUrl, findChampionByName, championAvatar } from "../hooks/useChampions";
-import { lookupSplashNum, lookupChromaInfo, ensureChromaInfo } from "../hooks/useSkinData";
+import {
+  lookupSplashNum,
+  lookupChromaInfo,
+  lookupFormInfo,
+  ensureChromaInfo,
+} from "../hooks/useSkinData";
 import type { DownloadedSkin } from "../types";
 
 function useChromaReady(): boolean {
@@ -25,6 +30,7 @@ type DownloadGroup = {
   base: DownloadedSkin | null;
   baseSkinName: string;
   chromas: { dl: DownloadedSkin; colors: string[] }[];
+  forms: { dl: DownloadedSkin; label: string }[];
 };
 
 type Selection = Record<string, string>;
@@ -143,17 +149,25 @@ export default function MySkins({
     for (const skin of downloads) {
       const champGroups = map.get(skin.champion_name) ?? [];
       const chromaInfo = lookupChromaInfo(skin.skin_name);
-      if (chromaInfo) {
+      const formInfo = lookupFormInfo(skin.skin_name);
+      if (formInfo) {
+        let g = champGroups.find((g) => g.baseSkinName === formInfo.parentName);
+        if (!g) {
+          g = { base: null, baseSkinName: formInfo.parentName, chromas: [], forms: [] };
+          champGroups.push(g);
+        }
+        g.forms.push({ dl: skin, label: formInfo.label });
+      } else if (chromaInfo) {
         let g = champGroups.find((g) => g.baseSkinName === chromaInfo.parentName);
         if (!g) {
-          g = { base: null, baseSkinName: chromaInfo.parentName, chromas: [] };
+          g = { base: null, baseSkinName: chromaInfo.parentName, chromas: [], forms: [] };
           champGroups.push(g);
         }
         g.chromas.push({ dl: skin, colors: chromaInfo.colors });
       } else {
         let g = champGroups.find((g) => g.baseSkinName === skin.skin_name);
         if (!g) {
-          g = { base: skin, baseSkinName: skin.skin_name, chromas: [] };
+          g = { base: skin, baseSkinName: skin.skin_name, chromas: [], forms: [] };
           champGroups.push(g);
         } else {
           g.base = skin;
@@ -262,15 +276,16 @@ export default function MySkins({
                     const selectedChroma = group.chromas.find(
                       (c) => c.dl.skin_name === selectedSkin
                     );
-                    const anySelected = baseSelected || !!selectedChroma;
+                    const selectedForm = group.forms.find((f) => f.dl.skin_name === selectedSkin);
+                    const anySelected = baseSelected || !!selectedChroma || !!selectedForm;
                     const baseClickable = !patcherActive && group.base !== null;
 
-                    const hasChromas = group.chromas.length > 0;
+                    const hasVariants = group.chromas.length > 0 || group.forms.length > 0;
                     return (
                       <div
                         key={group.baseSkinName}
                         className={
-                          hasChromas
+                          hasVariants
                             ? "bg-charcoal-500/70 border-charcoal-300/25 rounded-md border p-1.5"
                             : ""
                         }
@@ -315,10 +330,18 @@ export default function MySkins({
                                 style={{
                                   background: selectedChroma.colors[1]
                                     ? `linear-gradient(135deg, ${selectedChroma.colors[0]} 0% 50%, ${selectedChroma.colors[1]} 50% 100%)`
-                                    : selectedChroma.colors[0] ?? "var(--color-gold-400)",
+                                    : (selectedChroma.colors[0] ?? "var(--color-gold-400)"),
                                 }}
                                 title={`Chroma: ${selectedChroma.dl.skin_name}`}
                               />
+                            )}
+                            {selectedForm && (
+                              <div
+                                className="bg-gold-400 text-charcoal-600 absolute top-1 right-1 flex h-5 min-w-5 items-center justify-center rounded px-1 text-[8px] font-bold shadow-sm"
+                                title={selectedForm.dl.skin_name}
+                              >
+                                {selectedForm.label.replace("Form ", "F")}
+                              </div>
                             )}
 
                             <div className="absolute inset-x-0 bottom-0 bg-linear-to-t from-black/80 via-black/40 to-transparent px-1.5 pt-4 pb-1">
@@ -334,12 +357,13 @@ export default function MySkins({
                                 const names: string[] = [];
                                 if (group.base) names.push(group.base.skin_name);
                                 for (const c of group.chromas) names.push(c.dl.skin_name);
+                                for (const f of group.forms) names.push(f.dl.skin_name);
                                 handleDeleteGroup(champion, names);
                               }}
                               className="bg-charcoal-500 hover:bg-error text-ink-muted absolute top-1 left-1 flex h-5 w-5 cursor-pointer items-center justify-center rounded-full shadow transition-colors hover:text-white"
                               title={
-                                group.chromas.length > 0
-                                  ? `Delete skin and ${group.chromas.length} chroma${group.chromas.length === 1 ? "" : "s"}`
+                                hasVariants
+                                  ? `Delete skin and ${group.chromas.length + group.forms.length} variant${group.chromas.length + group.forms.length === 1 ? "" : "s"}`
                                   : "Delete skin"
                               }
                             >
@@ -367,16 +391,13 @@ export default function MySkins({
                                   title={`${c.dl.skin_name}\n(right-click to delete)`}
                                   className={[
                                     "ring-offset-charcoal-400 relative h-4 w-4 shrink-0 rounded-sm transition-all",
-                                    patcherActive
-                                      ? "cursor-default opacity-50"
-                                      : "cursor-pointer",
+                                    patcherActive ? "cursor-default opacity-50" : "cursor-pointer",
                                     isSel
                                       ? "ring-gold-400 ring-2 ring-offset-1"
                                       : "ring-charcoal-50/30 hover:ring-charcoal-50/60 ring-1",
                                   ].join(" ")}
                                   style={{
-                                    background:
-                                      bg ?? "var(--color-charcoal-300, #3a3a3a)",
+                                    background: bg ?? "var(--color-charcoal-300, #3a3a3a)",
                                   }}
                                 >
                                   {isSel && (
@@ -386,6 +407,36 @@ export default function MySkins({
                                       className="absolute inset-0 m-auto text-white drop-shadow"
                                     />
                                   )}
+                                </button>
+                              );
+                            })}
+                          </div>
+                        )}
+                        {group.forms.length > 0 && (
+                          <div className="mt-1 flex w-32 flex-wrap gap-1">
+                            {group.forms.map((form) => {
+                              const isSel = selectedSkin === form.dl.skin_name;
+                              return (
+                                <button
+                                  key={form.dl.skin_name}
+                                  onClick={() =>
+                                    toggleSkin(form.dl.champion_name, form.dl.skin_name)
+                                  }
+                                  onContextMenu={(e) => {
+                                    e.preventDefault();
+                                    handleDelete(form.dl.champion_name, form.dl.skin_name);
+                                  }}
+                                  disabled={patcherActive}
+                                  title={`${form.dl.skin_name}\n(right-click to delete)`}
+                                  className={[
+                                    "ring-offset-charcoal-400 relative rounded px-1.5 py-0.5 text-[9px] font-medium transition-all",
+                                    patcherActive ? "cursor-default opacity-50" : "cursor-pointer",
+                                    isSel
+                                      ? "bg-gold-400 text-charcoal-600 ring-gold-400 ring-2 ring-offset-1"
+                                      : "bg-charcoal-300 text-ink-secondary ring-charcoal-50/25 hover:ring-charcoal-50/50 ring-1",
+                                  ].join(" ")}
+                                >
+                                  {form.label}
                                 </button>
                               );
                             })}
